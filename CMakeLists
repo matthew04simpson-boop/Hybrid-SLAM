@@ -1,0 +1,25 @@
+cmake_minimum_required(VERSION 3.8)
+project(drone_slam_sim)
+
+find_package(ament_cmake REQUIRED)
+find_package(ament_cmake_python REQUIRED)
+
+ament_python_install_package(${PROJECT_NAME})
+
+install(PROGRAMS
+  drone_slam_sim/aruco_detector.py
+  drone_slam_sim/odom_to_tf.py
+  drone_slam_sim/drift_logger.py
+  drone_slam_sim/marker_correction.py
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+install(DIRECTORY
+  worlds
+  models
+  launch
+  config
+  DESTINATION share/${PROJECT_NAME}
+)
+
+ament_package()
