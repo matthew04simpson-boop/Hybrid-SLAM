@@ -1,0 +1,100 @@
+#!/usr/bin/env python3
+import rclpy
+from rclpy.node import Node
+from nav_msgs.msg import Odometry
+import math
+import csv
+import os
+from datetime import datetime
+
+
+class DriftLogger(Node):
+    def __init__(self):
+        super().__init__('drift_logger')
+        self.start_x = None
+        self.start_y = None
+        self.current_x = 0.0
+        self.current_y = 0.0
+        self.positions = []
+        self.sub = self.create_subscription(
+            Odometry,
+            '/model/slam_drone/odometry',
+            self.odom_callback,
+            10
+        )
+        self.timer = self.create_timer(0.5, self.log_position)
+        self.get_logger().info('='*50)
+        self.get_logger().info('DRIFT LOGGER STARTED')
+        self.get_logger().info('Drive a square loop then press Ctrl+C')
+        self.get_logger().info('='*50)
+
+    def odom_callback(self, msg):
+        self.current_x = msg.pose.pose.position.x
+        self.current_y = msg.pose.pose.position.y
+        if self.start_x is None:
+            self.start_x = self.current_x
+            self.start_y = self.current_y
+            self.get_logger().info(
+                f'Start: x={self.start_x:.3f}, y={self.start_y:.3f}')
+
+    def log_position(self):
+        if self.start_x is None:
+            return
+        dist = math.sqrt(
+            (self.current_x - self.start_x)**2 +
+            (self.current_y - self.start_y)**2
+        )
+        self.positions.append({
+            'time': len(self.positions) * 0.5,
+            'x': self.current_x,
+            'y': self.current_y,
+            'dist_from_start': dist
+        })
+        if len(self.positions) % 10 == 0:
+            self.get_logger().info(
+                f'x={self.current_x:.3f} y={self.current_y:.3f} '
+                f'dist={dist:.3f}m')
+
+    def save_results(self, run_name):
+        if not self.positions:
+            return
+        final_drift = math.sqrt(
+            (self.current_x - self.start_x)**2 +
+            (self.current_y - self.start_y)**2
+        )
+        out_dir = os.path.expanduser('~/drone_slam_ws/drift_results')
+        os.makedirs(out_dir, exist_ok=True)
+        timestamp = datetime.now().strftime('%H%M%S')
+        csv_path = os.path.join(out_dir, f'{run_name}_{timestamp}.csv')
+        with open(csv_path, 'w', newline='') as f:
+            writer = csv.DictWriter(
+                f, fieldnames=['time', 'x', 'y', 'dist_from_start'])
+            writer.writeheader()
+            writer.writerows(self.positions)
+        self.get_logger().info('='*50)
+        self.get_logger().info('RESULTS')
+        self.get_logger().info(
+            f'Start:      x={self.start_x:.3f} y={self.start_y:.3f}')
+        self.get_logger().info(
+            f'End:        x={self.current_x:.3f} y={self.current_y:.3f}')
+        self.get_logger().info(f'FINAL DRIFT: {final_drift:.4f} metres')
+        self.get_logger().info(f'Saved to:   {csv_path}')
+        self.get_logger().info('='*50)
+
+
+def main():
+    rclpy.init()
+    import sys
+    run_name = sys.argv[1] if len(sys.argv) > 1 else 'run'
+    node = DriftLogger()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        node.save_results(run_name)
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+
+if __name__ == '__main__':
+    main()
