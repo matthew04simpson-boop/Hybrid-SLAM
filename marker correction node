@@ -1,0 +1,93 @@
+#!/usr/bin/env python3
+import rclpy
+from rclpy.node import Node
+from nav_msgs.msg import Odometry
+from geometry_msgs.msg import PoseWithCovarianceStamped
+import math
+
+
+class MarkerCorrection(Node):
+    def __init__(self):
+        super().__init__('marker_correction')
+
+        self.markers = [
+            (-2.0,  -3.84, 0),
+            ( 2.0,   3.84, 1),
+            ( 4.84, -1.0,  2),
+            (-4.84,  1.0,  3),
+            ( 0.84,  0.5,  4),
+        ]
+
+        self.detection_range = 2.0
+        self.correction_interval = 2.0
+        self.current_x = 0.0
+        self.current_y = 0.0
+        self.last_correction_time = {}
+        self.corrections_published = 0
+
+        self.odom_sub = self.create_subscription(
+            Odometry,
+            '/model/slam_drone/odometry',
+            self.odom_callback,
+            10
+        )
+        self.pose_pub = self.create_publisher(
+            PoseWithCovarianceStamped,
+            '/initialpose',
+            10
+        )
+        self.timer = self.create_timer(0.5, self.check_markers)
+        self.get_logger().info('Marker correction node started')
+
+    def odom_callback(self, msg):
+        self.current_x = msg.pose.pose.position.x
+        self.current_y = msg.pose.pose.position.y
+
+    def check_markers(self):
+        now = self.get_clock().now().nanoseconds / 1e9
+        for marker_x, marker_y, marker_id in self.markers:
+            dist = math.sqrt(
+                (self.current_x - marker_x)**2 +
+                (self.current_y - marker_y)**2
+            )
+            if dist < self.detection_range:
+                last_time = self.last_correction_time.get(marker_id, 0)
+                if now - last_time > self.correction_interval:
+                    self.publish_correction(
+                        marker_x, marker_y, marker_id, dist)
+                    self.last_correction_time[marker_id] = now
+
+    def publish_correction(self, marker_x, marker_y, marker_id, dist):
+        msg = PoseWithCovarianceStamped()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = 'map'
+        correction_strength = 0.3
+        corrected_x = (self.current_x * (1 - correction_strength) +
+                       marker_x * correction_strength)
+        corrected_y = (self.current_y * (1 - correction_strength) +
+                       marker_y * correction_strength)
+        msg.pose.pose.position.x = corrected_x
+        msg.pose.pose.position.y = corrected_y
+        msg.pose.pose.position.z = 0.0
+        msg.pose.pose.orientation.w = 1.0
+        msg.pose.covariance[0] = 0.1
+        msg.pose.covariance[7] = 0.1
+        msg.pose.covariance[35] = 0.1
+        self.pose_pub.publish(msg)
+        self.corrections_published += 1
+        self.get_logger().info(
+            f'Marker {marker_id} detected at dist={dist:.2f}m | '
+            f'Correction #{self.corrections_published} published'
+        )
+
+
+def main():
+    rclpy.init()
+    node = MarkerCorrection()
+    rclpy.spin(node)
+    node.destroy_node()
+    rclpy.shutdown()
+
+
+if __name__ == '__main__':
+    main()
